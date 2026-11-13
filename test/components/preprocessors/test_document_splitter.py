@@ -1289,3 +1289,50 @@ class TestSplittingByTokenIntegration:
             expected_page = 1 + text[: d.meta["split_idx_start"] + leading_breaks].count("\f")
             assert d.meta["page_number"] == expected_page
         assert docs[-1].meta["page_number"] == 3
+
+    def test_run_split_by_word_respect_sentence_boundary_carry_never_exceeds_split_length(self) -> None:
+        # Issue #13740: with respect_sentence_boundary=True, the sentence carried for overlap was
+        # chosen without budgeting the next chunk's first sentence, so the next chunk could exceed
+        # split_length ("Go. We walk into the woods." = 6 words at split_length=5).
+        text = "Blue sky. Go. We walk into the woods."
+        for overlap in (1, 0):
+            document_splitter = DocumentSplitter(
+                split_by="word",
+                split_length=5,
+                split_overlap=overlap,
+                split_threshold=0,
+                language="en",
+                respect_sentence_boundary=True,
+            )
+            documents = document_splitter.run(documents=[Document(content=text)])["documents"]
+            for doc in documents:
+                assert len(doc.content.split()) <= 5, (
+                    f"overlap={overlap}: chunk {doc.content!r} exceeds split_length=5"
+                )
+        # overlap=1: carrying "Go." would leave no room for the five-word sentence,
+        # so the last chunk is emitted on its own
+        document_splitter = DocumentSplitter(
+            split_by="word",
+            split_length=5,
+            split_overlap=1,
+            split_threshold=0,
+            language="en",
+            respect_sentence_boundary=True,
+        )
+        documents = document_splitter.run(documents=[Document(content=text)])["documents"]
+        assert [doc.content for doc in documents] == ["Blue sky. Go. ", "We walk into the woods."]
+
+    def test_run_split_by_word_respect_sentence_boundary_overlap_kept_where_it_fits(self) -> None:
+        # The carry is only dropped when it would overflow the next chunk; when it fits,
+        # the overlap is still kept (split_length=6: "Go." + 5-word sentence = 6).
+        text = "Blue sky. Go. We walk into the woods."
+        document_splitter = DocumentSplitter(
+            split_by="word",
+            split_length=6,
+            split_overlap=1,
+            split_threshold=0,
+            language="en",
+            respect_sentence_boundary=True,
+        )
+        documents = document_splitter.run(documents=[Document(content=text)])["documents"]
+        assert [doc.content for doc in documents] == ["Blue sky. Go. ", "Go. We walk into the woods."]
